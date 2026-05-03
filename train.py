@@ -22,7 +22,7 @@ def evaluate_loss(model, ans_model, data_loader, criterion, device, batch_size=4
         for batch in data_loader:
             images, questions, answers = batch
             if len(images) == batch_size:
-                images, questions = images.to(device), questions.to(device)
+                images = images.to(device)
 
                 predicted_tokens = model(images, questions).float()
                 ans_embedds = ans_model(answers)
@@ -67,7 +67,7 @@ def train_model(
         for batch_idx, batch in enumerate(train_loader):
             images, questions, answers = batch
             if len(images) == batch_size:
-                images, questions = images.to(device), questions.to(device)
+                images = images.to(device)
 
                 predicted_tokens = model(images, questions).float()
                 ans_embedds = ans_model(answers)
