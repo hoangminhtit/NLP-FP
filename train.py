@@ -1,5 +1,6 @@
 import argparse
 import os
+import logging
 import torch
 import random
 import numpy as np
@@ -14,7 +15,14 @@ from transformers import AutoTokenizer
 from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction, brevity_penalty
 import math
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
+logger = logging.getLogger(__name__)
+
 def evaluate_loss(model, ans_model, data_loader, criterion, device, batch_size=4):
+    logger.info("Evaluate Model: start validation pass")
     model.eval()
     total_loss = 0.0
     num_batches = 0
@@ -32,8 +40,11 @@ def evaluate_loss(model, ans_model, data_loader, criterion, device, batch_size=4
                 num_batches += 1
 
     if num_batches == 0:
+        logger.info("Evaluate Model: no full batch found, returning 0.0 loss")
         return 0.0
-    return total_loss / num_batches
+    avg_val_loss = total_loss / num_batches
+    logger.info("Evaluate Model: done | avg_val_loss=%.4f | batches=%d", avg_val_loss, num_batches)
+    return avg_val_loss
 
 
 def train_model(
@@ -60,6 +71,7 @@ def train_model(
     epochs_no_improve = 0
 
     for epoch in range(num_epochs):
+        logger.info("Train Model: start epoch %d/%d", epoch + 1, num_epochs)
         model.train()
         total_loss = 0.0
         total_bleu_1, total_bleu_2, total_bleu_3, total_bleu_4, total_bleu_scores = 0.0, 0.0, 0.0, 0.0, 0.0
@@ -130,6 +142,10 @@ def train_model(
               f"Average BLEU@1: {avg_bleu_1:.4f}, Average BLEU@2: {avg_bleu_2:.4f}, "
               f"Average BLEU@3: {avg_bleu_3:.4f}, Average BLEU@4: {avg_bleu_4:.4f}, "
               f"Average BLEU-Scores: {avg_bleu_scores:.4f}\n")
+        logger.info(
+            "Train Model: end epoch %d/%d | loss=%.4f | bleu1=%.4f | bleu2=%.4f | bleu3=%.4f | bleu4=%.4f",
+            epoch + 1, num_epochs, avg_epoch_loss, avg_bleu_1, avg_bleu_2, avg_bleu_3, avg_bleu_4
+        )
 
         if val_loader is not None:
             val_loss = evaluate_loss(model, ans_model, val_loader, criterion, device, batch_size=batch_size)
@@ -144,17 +160,27 @@ def train_model(
                         os.makedirs(checkpoint_dir, exist_ok=True)
                     torch.save(model.state_dict(), checkpoint_path)
                     print(f"Saved best checkpoint to: {checkpoint_path}")
+                    logger.info("Checkpoint: saved best model to %s", checkpoint_path)
             else:
                 epochs_no_improve += 1
+                logger.info(
+                    "Evaluate Model: no improvement | best_val_loss=%.4f | current_val_loss=%.4f | patience=%d/%s",
+                    best_val_loss,
+                    val_loss,
+                    epochs_no_improve,
+                    str(early_stopping_patience) if early_stopping_patience is not None else "None",
+                )
 
             if early_stopping_patience is not None and epochs_no_improve >= early_stopping_patience:
                 print(f"Early stopping triggered after {epoch + 1} epochs.")
+                logger.info("Train Model: early stopping triggered at epoch %d", epoch + 1)
                 break
 
     return losses, bleu1_scores, bleu2_scores, bleu3_scores, bleu4_scores, bleu_scores
 
 
 if __name__=="__main__":
+    logger.info("Train Pipeline: parse arguments")
     parser = argparse.ArgumentParser(description="Train the ExVQA model")
     parser.add_argument("--dataset", type=str, default=config.DATASET_NAME, help="Hugging Face dataset name")
     parser.add_argument("--epochs", type=int, default=5, help="Number of training epochs")
@@ -163,18 +189,24 @@ if __name__=="__main__":
     parser.add_argument("--checkpoint", type=str, default=config.CHECKPOINT_PATH, help="Path to save best checkpoint")
     args = parser.parse_args()
 
+    logger.info("Load model: tokenizer from %s", config.TEXT_DIR)
     tokenizer = AutoTokenizer.from_pretrained(config.TEXT_DIR)
+    logger.info("Load model: VQAModel")
     model = VQAModel().to(config.DEVICE)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(model.parameters(), lr=0.0001)
+    logger.info("Load data: dataset=%s | batch_size=%d", args.dataset, args.batch_size)
     train_loader, val_loader, _ = build_dataloaders(args.dataset, batch_size=args.batch_size)
+    logger.info("Load scheduler: linear warmup")
     scheduler = get_linear_schedule_with_warmup(
         optimizer,
         num_warmup_steps=0,
         num_training_steps=int(len(train_loader) * 20),
     )
 
+    logger.info("Load model: answer embedding module")
     ans_model = AnsEmbedding().to(config.DEVICE)
+    logger.info("Train Model: start")
     train_model(
         model,
         ans_model,
@@ -189,3 +221,4 @@ if __name__=="__main__":
         early_stopping_patience=args.early_stopping,
         checkpoint_path=args.checkpoint,
     )
+    logger.info("Train Pipeline: completed")
