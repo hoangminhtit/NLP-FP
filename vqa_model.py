@@ -34,10 +34,35 @@ class VQAModel(nn.Module):
             nn.Linear(d_model, vocab_size)
         )
 
+    def _extract_image_tensor(self, image_outputs):
+        """
+        Normalize HuggingFace vision outputs to a tensor.
+        """
+        if torch.is_tensor(image_outputs):
+            return image_outputs
+
+        if hasattr(image_outputs, "last_hidden_state") and image_outputs.last_hidden_state is not None:
+            return image_outputs.last_hidden_state
+
+        if hasattr(image_outputs, "pooler_output") and image_outputs.pooler_output is not None:
+            return image_outputs.pooler_output
+
+        raise TypeError(
+            f"Unsupported image output type from encoder: {type(image_outputs)}"
+        )
+
     def forward(self, images, questions, max_len=config.MAX_LEN):
-        image_embeddings = self.image_model(images.to(config.DEVICE))
+        image_outputs = self.image_model(images.to(config.DEVICE))
+        image_embeddings = self._extract_image_tensor(image_outputs)
         batch_size = images.size(0)
-        image_embedds = image_embeddings.reshape(batch_size, 768, -1).permute(0, 2, 1)
+
+        if image_embeddings.dim() == 3:
+            # [batch, seq_len, hidden]
+            image_embedds = image_embeddings
+        else:
+            # [batch, hidden] -> [batch, 1, hidden]
+            image_embedds = image_embeddings.reshape(batch_size, 768, -1).permute(0, 2, 1)
+
         ques_embeddings = self.ques_model(questions)
         ques_embedds = ques_embeddings.unsqueeze(1)
         for att_layer in self.san_model:
