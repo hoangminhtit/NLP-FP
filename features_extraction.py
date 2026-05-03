@@ -71,10 +71,9 @@ class AnsEmbedding(nn.Module):
             truncation=True,
             return_attention_mask=False
         )
-
-        outputs = self.text_model(**tokenized_input)
-        hidden_states = outputs.last_hidden_state
-        return tokenized_input['input_ids'], hidden_states
+        tokenized_input = {k: v.to(config.DEVICE) for k, v in tokenized_input.items()}
+        # CrossEntropyLoss needs class indices [batch, seq_len] as target.
+        return tokenized_input['input_ids']
     
 if __name__=="__main__":
     image_model = ImageEmbedding(output_size=config.d_model).to(config.DEVICE)
