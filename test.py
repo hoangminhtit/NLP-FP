@@ -2,6 +2,8 @@ import argparse
 import os
 import math
 import logging
+import string
+from collections import Counter
 import torch
 from PIL import Image
 import torchvision.transforms as transforms
@@ -11,6 +13,40 @@ from vqa_model import VQAModel
 from data_processing import build_dataloaders
 from features_extraction import AnsEmbedding
 from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction, brevity_penalty
+
+PUNCT_TABLE = str.maketrans("", "", string.punctuation)
+
+
+def normalize_text(text):
+    if text is None:
+        return ""
+    normalized = text.lower().strip()
+    normalized = normalized.translate(PUNCT_TABLE)
+    normalized = " ".join(normalized.split())
+    return normalized
+
+
+def accuracy_score(prediction, ground_truth):
+    return 1.0 if normalize_text(prediction) == normalize_text(ground_truth) else 0.0
+
+
+def f1_score(prediction, ground_truth):
+    pred_tokens = normalize_text(prediction).split()
+    gold_tokens = normalize_text(ground_truth).split()
+
+    if len(pred_tokens) == 0 and len(gold_tokens) == 0:
+        return 1.0
+    if len(pred_tokens) == 0 or len(gold_tokens) == 0:
+        return 0.0
+
+    common = Counter(pred_tokens) & Counter(gold_tokens)
+    num_same = sum(common.values())
+    if num_same == 0:
+        return 0.0
+
+    precision = num_same / len(pred_tokens)
+    recall = num_same / len(gold_tokens)
+    return 2 * precision * recall / (precision + recall)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,10 +85,10 @@ def predict_batch(model, image_paths, questions, device):
     return predicted_sentences
 
 
-def load_model(checkpoint_path, device):
+def load_model(checkpoint_path, device, use_dual_gating=False):
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-    model = VQAModel().to(device)
+    model = VQAModel(use_dual_gating=use_dual_gating).to(device)
     model.load_state_dict(torch.load(checkpoint_path, map_location=device))
     return model
 
@@ -66,6 +102,8 @@ def evaluate_test(model, ans_model, data_loader, device, batch_size):
     total_bleu_3 = 0.0
     total_bleu_4 = 0.0
     total_bleu_scores = 0.0
+    total_accuracy = 0.0
+    total_f1 = 0.0
     num_batches = 0
     criterion = torch.nn.CrossEntropyLoss()
     smoother = SmoothingFunction()
@@ -99,6 +137,14 @@ def evaluate_test(model, ans_model, data_loader, device, batch_size):
             valid_bleu_scores = [score for score in bleu_scores_all if score > 0]
             bleu_score_total = bp * math.exp(sum(math.log(score) for score in valid_bleu_scores) / len(valid_bleu_scores)) if valid_bleu_scores else 0
 
+            batch_accuracy = 0.0
+            batch_f1 = 0.0
+            for pred, ref in zip(hypotheses, references):
+                batch_accuracy += accuracy_score(pred, ref)
+                batch_f1 += f1_score(pred, ref)
+            total_accuracy += batch_accuracy / batch_size
+            total_f1 += batch_f1 / batch_size
+
             loss = criterion(predicted_tokens.view(-1, 50257), ans_embedds.view(-1))
             total_loss += loss.item()
             total_bleu_1 += bleu_score_1
@@ -110,7 +156,7 @@ def evaluate_test(model, ans_model, data_loader, device, batch_size):
 
     if num_batches == 0:
         logger.info("Test Pipeline: no full batch found, returning zeros")
-        return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+        return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
     avg_loss = total_loss / num_batches
     avg_bleu_1 = total_bleu_1 / num_batches
@@ -118,16 +164,20 @@ def evaluate_test(model, ans_model, data_loader, device, batch_size):
     avg_bleu_3 = total_bleu_3 / num_batches
     avg_bleu_4 = total_bleu_4 / num_batches
     avg_bleu_scores = total_bleu_scores / num_batches
+    avg_accuracy = total_accuracy / num_batches
+    avg_f1 = total_f1 / num_batches
     logger.info(
-        "Test Pipeline: done | loss=%.4f | bleu1=%.4f | bleu2=%.4f | bleu3=%.4f | bleu4=%.4f | bleu=%.4f",
+        "Test Pipeline: done | loss=%.4f | bleu1=%.4f | bleu2=%.4f | bleu3=%.4f | bleu4=%.4f | bleu=%.4f | accuracy=%.4f | f1=%.4f",
         avg_loss,
         avg_bleu_1,
         avg_bleu_2,
         avg_bleu_3,
         avg_bleu_4,
         avg_bleu_scores,
+        avg_accuracy,
+        avg_f1,
     )
-    return avg_loss, avg_bleu_1, avg_bleu_2, avg_bleu_3, avg_bleu_4, avg_bleu_scores
+    return avg_loss, avg_bleu_1, avg_bleu_2, avg_bleu_3, avg_bleu_4, avg_bleu_scores, avg_accuracy, avg_f1
 
 # image = "/Users/duyhoang/Documents/Research/VQAG/code/sample/synpic40127.jpg"
 # question = "What is the MR weighting in this image?"
@@ -145,9 +195,10 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint", type=str, default=config.CHECKPOINT_PATH, help="Path to model checkpoint")
     parser.add_argument("--dataset", type=str, default=config.DATASET_NAME, help="Hugging Face dataset name")
     parser.add_argument("--batch-size", type=int, default=config.BATCH_SIZE, help="Batch size")
+    parser.add_argument("--use-dual-gating", action="store_true", help="Enable DualGatedFusion for ablation")
     args = parser.parse_args()
 
-    model = load_model(args.checkpoint, device=config.DEVICE)
+    model = load_model(args.checkpoint, device=config.DEVICE, use_dual_gating=args.use_dual_gating)
 
     _, _, test_loader = build_dataloaders(args.dataset, batch_size=args.batch_size)
     ans_model = AnsEmbedding().to(config.DEVICE)

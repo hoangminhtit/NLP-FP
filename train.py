@@ -1,6 +1,9 @@
 import argparse
 import os
 import logging
+import math
+import string
+from collections import Counter
 import torch
 import random
 import numpy as np
@@ -13,7 +16,40 @@ from data_processing import build_dataloaders
 from features_extraction import AnsEmbedding
 from transformers import AutoTokenizer
 from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction, brevity_penalty
-import math
+
+PUNCT_TABLE = str.maketrans("", "", string.punctuation)
+
+
+def normalize_text(text):
+    if text is None:
+        return ""
+    normalized = text.lower().strip()
+    normalized = normalized.translate(PUNCT_TABLE)
+    normalized = " ".join(normalized.split())
+    return normalized
+
+
+def accuracy_score(prediction, ground_truth):
+    return 1.0 if normalize_text(prediction) == normalize_text(ground_truth) else 0.0
+
+
+def f1_score(prediction, ground_truth):
+    pred_tokens = normalize_text(prediction).split()
+    gold_tokens = normalize_text(ground_truth).split()
+
+    if len(pred_tokens) == 0 and len(gold_tokens) == 0:
+        return 1.0
+    if len(pred_tokens) == 0 or len(gold_tokens) == 0:
+        return 0.0
+
+    common = Counter(pred_tokens) & Counter(gold_tokens)
+    num_same = sum(common.values())
+    if num_same == 0:
+        return 0.0
+
+    precision = num_same / len(pred_tokens)
+    recall = num_same / len(gold_tokens)
+    return 2 * precision * recall / (precision + recall)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -75,6 +111,8 @@ def train_model(
         model.train()
         total_loss = 0.0
         total_bleu_1, total_bleu_2, total_bleu_3, total_bleu_4, total_bleu_scores = 0.0, 0.0, 0.0, 0.0, 0.0
+        total_accuracy = 0.0
+        total_f1 = 0.0
 
         for batch_idx, batch in enumerate(train_loader):
             images, questions, answers = batch
@@ -110,6 +148,14 @@ def train_model(
                 total_bleu_4 += bleu_score_4
                 total_bleu_scores += bleu_score_total
 
+                batch_accuracy = 0.0
+                batch_f1 = 0.0
+                for pred, ref in zip(hypotheses, references):
+                    batch_accuracy += accuracy_score(pred, ref)
+                    batch_f1 += f1_score(pred, ref)
+                total_accuracy += batch_accuracy / batch_size
+                total_f1 += batch_f1 / batch_size
+
                 # Loss calculation
                 loss = criterion(predicted_tokens.view(-1, 50257), ans_embedds.view(-1))
                 optimizer.zero_grad()
@@ -122,7 +168,11 @@ def train_model(
                 if (batch_idx + 1) % print_every == 0:
                     avg_loss_so_far = total_loss / (batch_idx + 1)
                     print(f"Epoch [{epoch + 1}/{num_epochs}], Batch [{batch_idx + 1}/{len(train_loader)}], Avg Loss So Far: {avg_loss_so_far:.4f}")
-                    print(f"BLEU@1: {bleu_score_1:.4f}, BLEU@2: {bleu_score_2:.4f}, BLEU@3: {bleu_score_3:.4f}, BLEU@4: {bleu_score_4:.4f}, BLEU-SCORES: {bleu_score_total:.4f}")
+                    print(
+                        f"BLEU@1: {bleu_score_1:.4f}, BLEU@2: {bleu_score_2:.4f}, BLEU@3: {bleu_score_3:.4f}, "
+                        f"BLEU@4: {bleu_score_4:.4f}, BLEU-SCORES: {bleu_score_total:.4f}, "
+                        f"Accuracy: {batch_accuracy / batch_size:.4f}, F1-score: {batch_f1 / batch_size:.4f}"
+                    )
 
         avg_epoch_loss = total_loss / len(train_loader)
         avg_bleu_1 = total_bleu_1 / len(train_loader)
@@ -130,6 +180,8 @@ def train_model(
         avg_bleu_3 = total_bleu_3 / len(train_loader)
         avg_bleu_4 = total_bleu_4 / len(train_loader)
         avg_bleu_scores = total_bleu_scores / len(train_loader)
+        avg_accuracy = total_accuracy / len(train_loader)
+        avg_f1 = total_f1 / len(train_loader)
 
         losses.append(avg_epoch_loss)
         bleu1_scores.append(avg_bleu_1)
@@ -141,10 +193,11 @@ def train_model(
         print(f"Epoch [{epoch + 1}/{num_epochs}] - Average Loss: {avg_epoch_loss:.4f}, "
               f"Average BLEU@1: {avg_bleu_1:.4f}, Average BLEU@2: {avg_bleu_2:.4f}, "
               f"Average BLEU@3: {avg_bleu_3:.4f}, Average BLEU@4: {avg_bleu_4:.4f}, "
-              f"Average BLEU-Scores: {avg_bleu_scores:.4f}\n")
+              f"Average BLEU-Scores: {avg_bleu_scores:.4f}, Average Accuracy: {avg_accuracy:.4f}, "
+              f"Average F1-score: {avg_f1:.4f}\n")
         logger.info(
-            "Train Model: end epoch %d/%d | loss=%.4f | bleu1=%.4f | bleu2=%.4f | bleu3=%.4f | bleu4=%.4f",
-            epoch + 1, num_epochs, avg_epoch_loss, avg_bleu_1, avg_bleu_2, avg_bleu_3, avg_bleu_4
+            "Train Model: end epoch %d/%d | loss=%.4f | bleu1=%.4f | bleu2=%.4f | bleu3=%.4f | bleu4=%.4f | accuracy=%.4f | f1=%.4f",
+            epoch + 1, num_epochs, avg_epoch_loss, avg_bleu_1, avg_bleu_2, avg_bleu_3, avg_bleu_4, avg_accuracy, avg_f1
         )
 
         if val_loader is not None:
@@ -187,12 +240,13 @@ if __name__=="__main__":
     parser.add_argument("--early-stopping", type=int, default=3, help="Early stopping patience")
     parser.add_argument("--batch-size", type=int, default=config.BATCH_SIZE, help="Batch size")
     parser.add_argument("--checkpoint", type=str, default=config.CHECKPOINT_PATH, help="Path to save best checkpoint")
+    parser.add_argument("--use-dual-gating", action="store_true", help="Enable DualGatedFusion for ablation")
     args = parser.parse_args()
 
     logger.info("Load model: tokenizer from %s", config.TEXT_DIR)
     tokenizer = AutoTokenizer.from_pretrained(config.TEXT_DIR)
     logger.info("Load model: VQAModel")
-    model = VQAModel().to(config.DEVICE)
+    model = VQAModel(use_dual_gating=args.use_dual_gating).to(config.DEVICE)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(model.parameters(), lr=0.0001)
     logger.info("Load data: dataset=%s | batch_size=%d", args.dataset, args.batch_size)
