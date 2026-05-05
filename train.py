@@ -14,6 +14,7 @@ from vqa_model import VQAModel
 from config import config
 from data_processing import build_dataloaders
 from features_extraction import AnsEmbedding
+from utils.training_plots import plot_training_history, save_training_history
 from transformers import AutoTokenizer
 from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction, brevity_penalty
 
@@ -100,8 +101,17 @@ def train_model(
 ):
     smoother = SmoothingFunction()
 
-    losses = []
-    bleu1_scores, bleu2_scores, bleu3_scores, bleu4_scores, bleu_scores = [], [], [], [], []
+    history = {
+        "train_loss": [],
+        "val_loss": [],
+        "bleu1": [],
+        "bleu2": [],
+        "bleu3": [],
+        "bleu4": [],
+        "bleu_total": [],
+        "accuracy": [],
+        "f1": [],
+    }
 
     best_val_loss = float("inf")
     epochs_no_improve = 0
@@ -183,12 +193,14 @@ def train_model(
         avg_accuracy = total_accuracy / len(train_loader)
         avg_f1 = total_f1 / len(train_loader)
 
-        losses.append(avg_epoch_loss)
-        bleu1_scores.append(avg_bleu_1)
-        bleu2_scores.append(avg_bleu_2)
-        bleu3_scores.append(avg_bleu_3)
-        bleu4_scores.append(avg_bleu_4)
-        bleu_scores.append(avg_bleu_scores)
+        history["train_loss"].append(avg_epoch_loss)
+        history["bleu1"].append(avg_bleu_1)
+        history["bleu2"].append(avg_bleu_2)
+        history["bleu3"].append(avg_bleu_3)
+        history["bleu4"].append(avg_bleu_4)
+        history["bleu_total"].append(avg_bleu_scores)
+        history["accuracy"].append(avg_accuracy)
+        history["f1"].append(avg_f1)
 
         print(f"Epoch [{epoch + 1}/{num_epochs}] - Average Loss: {avg_epoch_loss:.4f}, "
               f"Average BLEU@1: {avg_bleu_1:.4f}, Average BLEU@2: {avg_bleu_2:.4f}, "
@@ -202,6 +214,7 @@ def train_model(
 
         if val_loader is not None:
             val_loss = evaluate_loss(model, ans_model, val_loader, criterion, device, batch_size=batch_size)
+            history["val_loss"].append(val_loss)
             print(f"Epoch [{epoch + 1}/{num_epochs}] - Validation Loss: {val_loss:.4f}")
 
             if val_loss < best_val_loss:
@@ -228,8 +241,10 @@ def train_model(
                 print(f"Early stopping triggered after {epoch + 1} epochs.")
                 logger.info("Train Model: early stopping triggered at epoch %d", epoch + 1)
                 break
+        else:
+            history["val_loss"].append(float("nan"))
 
-    return losses, bleu1_scores, bleu2_scores, bleu3_scores, bleu4_scores, bleu_scores
+    return history
 
 
 if __name__=="__main__":
@@ -261,7 +276,7 @@ if __name__=="__main__":
     logger.info("Load model: answer embedding module")
     ans_model = AnsEmbedding().to(config.DEVICE)
     logger.info("Train Model: start")
-    train_model(
+    training_history = train_model(
         model,
         ans_model,
         train_loader,
@@ -275,4 +290,8 @@ if __name__=="__main__":
         early_stopping_patience=args.early_stopping,
         checkpoint_path=args.checkpoint,
     )
+    history_path = os.path.join("outputs", "training_history.json")
+    save_training_history(training_history, history_path)
+    plot_training_history(training_history, output_dir="outputs")
+    logger.info("Train Pipeline: saved training curves and metrics in outputs/")
     logger.info("Train Pipeline: completed")
