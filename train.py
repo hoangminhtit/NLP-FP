@@ -254,6 +254,7 @@ if __name__=="__main__":
     parser.add_argument("--epochs", type=int, default=5, help="Number of training epochs")
     parser.add_argument("--early-stopping", type=int, default=3, help="Early stopping patience")
     parser.add_argument("--batch-size", type=int, default=config.BATCH_SIZE, help="Batch size")
+    parser.add_argument("--learning-rate", type=float, default=1e-4, help="Learning rate for AdamW optimizer")
     parser.add_argument("--checkpoint", type=str, default=config.CHECKPOINT_PATH, help="Path to save best checkpoint")
     parser.add_argument("--use-dual-gating", action="store_true", help="Enable DualGatedFusion for ablation")
     args = parser.parse_args()
@@ -263,8 +264,13 @@ if __name__=="__main__":
     logger.info("Load model: VQAModel")
     model = VQAModel(use_dual_gating=args.use_dual_gating).to(config.DEVICE)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.AdamW(model.parameters(), lr=0.0001)
-    logger.info("Load data: dataset=%s | batch_size=%d", args.dataset, args.batch_size)
+    optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
+    logger.info(
+        "Load data: dataset=%s | batch_size=%d | learning_rate=%g",
+        args.dataset,
+        args.batch_size,
+        args.learning_rate,
+    )
     train_loader, val_loader, _ = build_dataloaders(args.dataset, batch_size=args.batch_size)
     logger.info("Load scheduler: linear warmup")
     scheduler = get_linear_schedule_with_warmup(
