@@ -65,7 +65,7 @@ def plot_training_history(history: Dict[str, List[float]], output_dir: str = "ou
     plt.figure(figsize=(9, 5))
     plt.plot(epochs, accuracy, marker="o", label="Accuracy")
     plt.plot(epochs, f1, marker="s", label="F1-score")
-    plt.title("Accuracy and F1 per Epoch")
+    plt.title("Accuracy and F1-score per epoch")
     plt.xlabel("Epoch")
     plt.ylabel("Score")
     plt.grid(True, alpha=0.3)

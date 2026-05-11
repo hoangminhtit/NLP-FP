@@ -31,22 +31,36 @@ class VQA_dataset(Dataset):
         return image, question, answer
 
 
-def build_dataloaders(dataset_name=DATASET_NAME, batch_size=None):
+def build_dataloaders(dataset_name=DATASET_NAME, batch_size=None, val_split=None, seed=42):
     if batch_size is None:
         batch_size = config.BATCH_SIZE
+    if val_split is None:
+        val_split = getattr(config, "VAL_SPLIT", 0.1)
 
     dataset = load_dataset(dataset_name)
+    if 'train' not in dataset:
+        raise KeyError("Dataset is missing 'train' split")
+
     train_data = dataset['train']
-    val_data = dataset['validation']
-    test_data = dataset['test']
+    if 'validation' in dataset:
+        val_data = dataset['validation']
+    elif 'val' in dataset:
+        val_data = dataset['val']
+    else:
+        # Create a validation split from the training data when not provided.
+        split = train_data.train_test_split(test_size=val_split, seed=seed)
+        train_data = split['train']
+        val_data = split['test']
+
+    test_data = dataset['test'] if 'test' in dataset else None
 
     train_dataset = VQA_dataset(train_data, transform=image_transforms)
     val_dataset = VQA_dataset(val_data, transform=image_transforms)
-    test_dataset = VQA_dataset(test_data, transform=image_transforms)
+    test_dataset = VQA_dataset(test_data, transform=image_transforms) if test_data is not None else None
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False) if test_dataset is not None else None
 
     return train_loader, val_loader, test_loader
 
