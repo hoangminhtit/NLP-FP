@@ -54,7 +54,7 @@ python train.py --dataset flaviagiammarino/path-vqa --epochs 5 --early-stopping 
 ```
 
 ### Training Parameters
-- **Dataset**: `--dataset` (default: `flaviagiammarino/path-vqa`).
+- **Dataset**: `--dataset`: **flaviagiammarino/vqa-rad** and **flaviagiammarino/path-vqa** (default: `flaviagiammarino/path-vqa`).
 - **Batch Size**: `--batch-size` (default: 4).
 - **Number of Epochs**: `--epochs` (default: 5).
 - **Early Stopping**: `--early-stopping` (default: 3).
@@ -67,6 +67,14 @@ python train.py --dataset flaviagiammarino/path-vqa --epochs 5 --early-stopping 
 To test the model on new images and questions, use the `test.py` script:
 ```bash
 python test.py
+```
+
+```bash
+python test.py \
+  --checkpoint checkpoints/best_model.pt \
+  --dataset flaviagiammarino/path-vqa \
+  --batch-size 12 \
+  --use-dual-gating
 ```
 
 ### Example Usage
